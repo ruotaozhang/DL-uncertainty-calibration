@@ -8,7 +8,7 @@ from PIL import Image
 
 
 class DRDataset(torch.utils.data.Dataset):
-    def __init__(self, file_list, img_path, label_path, transform=None, is_binary=True):
+    def __init__(self, file_list: list, img_path: str, label_path: str, transform=None, is_binary=True):
         self.file_list = file_list
         self.img_path = img_path
         self.name2label = dict(np.loadtxt(os.path.join(label_path, 'trainLabels.csv'), dtype=str, delimiter=','))
@@ -18,7 +18,7 @@ class DRDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.file_list)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int):
         img_file_name = self.file_list[idx]  # contains .jpeg
         img_name = img_file_name[:img_file_name.index('.jpeg')]  # does not contain .jpeg
         img = Image.open(os.path.join(self.img_path, img_file_name))
@@ -30,7 +30,7 @@ class DRDataset(torch.utils.data.Dataset):
         return img, label
 
 
-def DR_data_loader(img_path, label_path, subset_size=5000, seed=666, batch_size=64, b_seed=None,
+def DR_data_loader(img_path: str, label_path: str, subset_size=5000, seed=666, batch_size=64, b_seed=None,
                    num_workers=8, verbose=0) -> dict:
     # negative subset_size means use the whole dataset. 
     data_files = sorted(os.listdir(img_path))
@@ -130,7 +130,7 @@ def DR_data_loader(img_path, label_path, subset_size=5000, seed=666, batch_size=
 
 
 class AptosDataset(torch.utils.data.Dataset):
-    def __init__(self, file_list, img_path, label_path, transform=None, is_binary=True):
+    def __init__(self, file_list: list, img_path: str, label_path: str, transform=None, is_binary=True):
         self.file_list = file_list
         self.img_path = img_path
         self.name2label = dict(np.loadtxt(os.path.join(label_path, 'trainLabels.csv'), dtype=str, delimiter=','))
@@ -140,7 +140,7 @@ class AptosDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.file_list)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int):
         img_file_name = self.file_list[idx]  # contains .png
         img_name = img_file_name[:img_file_name.index('.png')]  # does not contain .png
         img = Image.open(os.path.join(self.img_path, img_file_name))
@@ -152,7 +152,7 @@ class AptosDataset(torch.utils.data.Dataset):
         return img, label
 
 
-def Aptos_data_loader(img_path, label_path, seed=666, batch_size=64, num_workers=8, verbose=0) -> dict:
+def Aptos_data_loader(img_path: str, label_path: str, seed=666, batch_size=64, num_workers=8, verbose=0) -> dict:
     data_files = sorted(os.listdir(img_path))
 
     # split into train/test
