@@ -1,0 +1,13 @@
+{'architecture': 'resnet50'
+,'subset_size': 0
+,'bootstrap': True
+,'conv_drop_p': 0.2
+,'domain_adapted': 0
+,'add_noise': True
+,'learning_rate': 5e-5
+,'weight_decay': 5e-5
+,'n_epoch': 100
+,'label_type': 'binary'
+,'batch_size': 16
+,'pretrained': True
+}

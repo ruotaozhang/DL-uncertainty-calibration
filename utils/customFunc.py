@@ -28,8 +28,8 @@ def multinomial_cov_highdim(array):
     return out
 
 
-def add_dropout(model, drop_p, type='1d'):
-    assert type in ['1d', '2d'], 'invalid type value'
+def add_dropout(model, drop_p, dropout_type='1d'):
+    assert dropout_type in ['1d', '2d'], 'invalid type value'
     layers_to_change = []
     for name, module in model.named_modules():
         if isinstance(module, torch.nn.Conv2d):
@@ -52,14 +52,14 @@ def add_dropout(model, drop_p, type='1d'):
             m = model.__getattr__(child)
             orig_layer = copy.deepcopy(m)  # deepcopy, otherwise you'll get an infinite recusrsion
         # Add your layer here
-        if type == '1d':
+        if dropout_type == '1d':
             m.__setattr__(child, torch.nn.Sequential(orig_layer, torch.nn.Dropout(p=drop_p)))
         else:
             m.__setattr__(child, torch.nn.Sequential(orig_layer, torch.nn.Dropout2d(p=drop_p)))
     return model
 
 
-def make_net(output_dim, architecture='shuffle05', drop_p=0.0, pretrained=True, add_noise=False):
+def make_net(output_dim: int, architecture='shuffle05', drop_p=0.0, pretrained=True, add_noise=False):
     assert architecture in ['shuffle05', 'shuffle10', 'mobile', 'resnet50'], 'wrong network architecture choice'
     if architecture == 'shuffle05':
         nnet = models.shufflenet_v2_x0_5(pretrained=pretrained)
@@ -133,50 +133,6 @@ def make_DANN_v2(output_dim, architecture='shuffle05', drop_p=0.0, pretrained=Tr
                 param.add_(torch.randn(param.size()) * 0.01)
 
     return torch.nn.DataParallel(fe), torch.nn.DataParallel(lc), torch.nn.DataParallel(dc)
-
-
-def make_dalib(output_dim, da_type, architecture='shuffle05', drop_p=0.0, pretrained=True, add_noise=False):
-    assert da_type in ['dann', 'cdan'], 'type: invalid input'
-    assert architecture in ['shuffle05', 'shuffle10', 'mobile', 'resnet50'], 'network architecture: invalid'
-    if architecture == 'shuffle05':
-        backbone = models.shufflenet_v2_x0_5(pretrained=pretrained)
-        backbone.fc = torch.nn.Identity()
-    elif architecture == 'shuffle10':
-        backbone = models.shufflenet_v2_x1_0(pretrained=pretrained)
-        backbone.fc = torch.nn.Identity()
-    elif architecture == 'mobile':
-        backbone = models.mobilenet_v2(pretrained=pretrained)
-        backbone.classifier = torch.nn.Identity()
-    else:
-        backbone = models.resnet50(pretrained=pretrained)
-        backbone.fc = torch.nn.Identity()
-
-    with torch.no_grad():
-        a = backbone.to('cpu')(torch.rand(2, 3, 512, 512))
-    backbone.out_features = a.view(2, -1).shape[1]
-
-    if drop_p > 0:
-        backbone = add_dropout(model=backbone, drop_p=drop_p)
-        print('inserting dropout layers after all conv2d layers in backbone with drop_p={}'.format(drop_p))
-
-    print('number of param: {}'.format(sum([param.nelement() for param in backbone.parameters()])))
-
-    if add_noise:
-        assert pretrained, 'can only add noise to pretrained weights'
-        print('adding noise to pretrained weights in backbone')
-        with torch.no_grad():
-            for param in backbone.parameters():
-                param.add_(torch.randn(param.size()) * 0.01)
-    if da_type == 'dann':
-        classifier = dalib.adaptation.dann.ImageClassifier(backbone, output_dim)  # bottleneck_dim = 256 default
-        domain_discriminator = DomainDiscriminator(in_feature=classifier.features_dim, hidden_size=128)
-        domain_adv = dalib.adaptation.dann.DomainAdversarialLoss(domain_discriminator)
-    else:
-        classifier = dalib.adaptation.cdan.ImageClassifier(backbone, output_dim)  # bottleneck_dim = 256 default
-        domain_discriminator = DomainDiscriminator(in_feature=classifier.features_dim, hidden_size=128)
-        domain_adv = dalib.adaptation.cdan.ConditionalDomainAdversarialLoss(domain_discriminator)
-
-    return classifier, domain_adv
 
 
 def refer_performance2(pred_prob, truth, binning_scheme='quantile', n_bins=50):
@@ -275,30 +231,31 @@ def pred_batch(model_list, img_batch, T=10, mc=False):
 
     M = len(model_list)  # M is the size of ensemble
 
-    domain_adapted = isinstance(model_list[0], dict)
+    is_dann_v2 = isinstance(model_list[0], dict)
+
     with torch.no_grad():
-        if domain_adapted:
-            # model must have lc and dd
-            assert {'lc', 'dd'} == set(model_list[0].keys()), 'invalid input model'
+        if is_dann_v2:
+            # model must have fe,lc and dc
+            assert {'fe', 'lc', 'dc'} == set(model_list[0].keys()), 'invalid input model'
             device = next(model_list[0]['lc'].parameters()).device
         else:
-            assert len(
-                set(list(map(lambda x: next(x.parameters()).device, model_list)))) == 1, 'models on different devices'
+            assert len(set([next(m.parameters()).device for m in model_list])) == 1, 'models on different devices'
             device = next(model_list[0].parameters()).device
-
     if not mc:
         T = 1
 
+    prob_list = []
+    yhat_list = []
     with torch.no_grad():
-        prob_list = []
-        yhat_list = []
         for m in range(M):
-            if domain_adapted:
+            if is_dann_v2:
+                fe = model_list[m]['fe']
                 lc = model_list[m]['lc']
+                fe.eval()
                 lc.eval()
                 if mc:
-                    lc.train()  # set dropout to train mode, but not BatchNorm
-                    for l in lc.modules():
+                    fe.train()  # set dropout to train mode, but not BatchNorm
+                    for l in fe.modules():
                         if isinstance(l, torch.nn.BatchNorm2d): l.eval()
             else:
                 nnet = model_list[m]
@@ -308,8 +265,10 @@ def pred_batch(model_list, img_batch, T=10, mc=False):
                     for l in nnet.modules():
                         if isinstance(l, torch.nn.BatchNorm2d): l.eval()
             for t in range(T):
-                if domain_adapted:
-                    yhat, _ = lc(img_batch.to(device))
+                if is_dann_v2:
+                    yhat = lc(fe(img_batch.to(device)))
+                elif 'domain_classifier' in dict(nnet.named_children()).keys():
+                    yhat, _ = nnet(img_batch.to(device), alpha=0.5)
                 else:
                     yhat = nnet(img_batch.to(device))
                 yhat = yhat.cpu()  # shape=(batch_size,output_dim)
@@ -328,7 +287,7 @@ def pred_batch(model_list, img_batch, T=10, mc=False):
         return yhat_array, prob_array
 
 
-def pred_acc(model_list, data_loader, T=10, mc=False):
+def pred_acc(model_list:list, data_loader, T=10, mc=False):
     # T is the number of MC samples
     assert isinstance(model_list, list), 'argument model must be a list of network instances'
     assert len(model_list) > 0, 'model list must be non-empty'
@@ -380,8 +339,6 @@ def pred_acc(model_list, data_loader, T=10, mc=False):
             'aleatoric2': result_dict['aleatoric2'], 'epistemic2': result_dict['epistemic2']}
 
 
-
-
 def meanprob2logit(mean_probs):
     mean_probs = torch.tensor(
         list(map(lambda x: x - 1e-5 if x == 1.0 else (x + 1e-5 if x == 0.0 else x), list(mean_probs.numpy()))))
@@ -418,35 +375,47 @@ def auc_estimation(y: np.ndarray, s: np.ndarray, bootstrap=False) -> dict:
     return {'mu': auc}
 
 
-def get_dir():
+def get_path(device_id=None) -> dict:
+    """
+    get paths to useful directories
+    :param device_id: specify gpu id on Athena
+    :return: a dictionary containing relevant paths
+    """
     try:
-        current_file_dir = os.path.dirname(os.path.abspath(__file__)).replace('\\', '/')
+        current_file_path = os.path.dirname(os.path.abspath(__file__)).replace('\\', '/')
     except NameError:
-        current_file_dir = os.getcwd().replace('\\', '/')
+        current_file_path = os.getcwd().replace('\\', '/')
 
-    current_parent_dir = os.path.dirname(current_file_dir)
-    current_parent_parent_dir = os.path.dirname(current_parent_dir)
+    current_parent_path = os.path.dirname(current_file_path)
+    current_parent_parent_path = os.path.dirname(current_parent_path)
 
     system = platform.system()
     if system == 'Linux':
         if 'centos' in platform.platform():
-            data_dir = current_parent_parent_dir + '/datasets'
-            save_dir = current_parent_parent_dir + '/saved_files'
+            data_path = current_parent_parent_path + '/datasets'
+            save_path = current_parent_parent_path + '/saved_files'
+            if device_id is not None:
+                assert device_id in ['0', '1'], 'invalid argument device_id'
+                os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+                os.environ["CUDA_VISIBLE_DEVICES"] = device_id
         else:
-            data_dir = '/gpfs/data/jsteingr/rzhang63/datasets'
-            save_dir = os.path.dirname(data_dir) + '/saved_files'
+            data_path = '/gpfs/data/jsteingr/rzhang63/datasets'
+            save_path = os.path.dirname(data_path) + '/saved_files'
     else:
-        data_dir = 'D:/ML/datasets'
-        save_dir = current_parent_parent_dir + '/saved_files'
+        data_path = 'D:/ML/datasets'
+        save_path = current_parent_parent_path + '/saved_files'
 
-    drd_dir = data_dir + '/diabetic-retinopathy-detection/train/'
-    aptos_dir = data_dir + '/aptos2019-blindness-detection/train/'
-    model_save_dir = save_dir + '/model_files/DR/'
-    evaldict_save_dir = save_dir + '/eval_dicts/'
-    tensorboard_dir = save_dir + '/tensorboard_summary/'
-    return {'drd': drd_dir, 'aptos': aptos_dir, 'model_save': model_save_dir, 'evaldict_save': evaldict_save_dir,
-            'tfboard': tensorboard_dir, 'current': current_file_dir, 'current_parent': current_parent_dir,
-            'current_parent_parent': current_parent_parent_dir}
+    drd_img_path = data_path + '/diabetic-retinopathy-detection/train/'
+    drd_label_path = data_path + '/diabetic-retinopathy-detection/'
+    aptos_img_path = data_path + '/aptos2019-blindness-detection/train/'
+    aptos_label_path = data_path + '/aptos2019-blindness-detection/'
+    model_save_path = save_path + '/model_files/DR/'
+    evaldict_save_path = save_path + '/eval_dicts/'
+    tensorboard_path = save_path + '/tensorboard_summary/'
+    return {'drd_img': drd_img_path, 'drd_label': drd_label_path, 'aptos_img': aptos_img_path,
+            'aptos_label': aptos_label_path, 'model_save': model_save_path, 'evaldict_save': evaldict_save_path,
+            'tfboard': tensorboard_path, 'current': current_file_path, 'current_parent': current_parent_path,
+            'current_parent_parent': current_parent_parent_path}
 
 
 def running_mean(x, N):
@@ -457,4 +426,3 @@ def running_mean(x, N):
 def msg(message):
     logging.info(message)
     print(message)
-
