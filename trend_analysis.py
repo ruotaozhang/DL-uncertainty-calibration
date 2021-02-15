@@ -59,68 +59,85 @@ not_na_mask = pd.notna(df['APTOS Test A1'])
 stats.pearsonr(df['APTOS Test A1'][not_na_mask], df['APTOS Test ECE1'][not_na_mask])
 
 #####################
-fontsize = 20
+fontsize = 42
 save = dir_dict['current_parent_parent'] + '/results/images/aptos_test_tau_comparison.png'
 set_fontsize(fontsize)
-#plt.tight_layout()
+plt.figure(figsize=(12, 9))
 sns.kdeplot(df['APTOS Test Tau1'], shade=True, color="r", clip=(-1, 1),
-            label='Before calibration',legend=False)
-sns.kdeplot(df['APTOS Test Tau2'], shade=True, color="b", clip=(-1, 1), label='Oracle referral',legend=False)
-sns_plot = sns.kdeplot(df['APTOS Test Tau3'], shade=True, color="orange", clip=(-1, 1),
-                       label='After calibration',legend=False)
-fig = sns_plot.get_figure()
-fig.savefig(save)
+            label='Before calibration', legend=False)
+sns.kdeplot(df['APTOS Test Tau2'], shade=True, color="b", clip=(-1, 1), label='Oracle referral', legend=False)
+sns.kdeplot(df['APTOS Test Tau3'], shade=True, color="orange", clip=(-1, 1),
+                       label='After calibration', legend=False)
+plt.xlabel('MK')
+plt.ylabel('Density')
+plt.tight_layout()
+plt.savefig(save)
 
 save = dir_dict['current_parent_parent'] + '/results/images/drd_test_tau_comparison.png'
 set_fontsize(fontsize)
+plt.figure(figsize=(12, 9))
 sns.kdeplot(df['DRD Test Tau1'], shade=True, color="r", clip=(-1, 1),
-            label='Before calibration',legend=False)
-sns.kdeplot(df['DRD Test Tau2'], shade=True, color="b", clip=(-1, 1), label='Oracle referral',legend=False)
-sns_plot = sns.kdeplot(df['DRD Test Tau3'], shade=True, color="orange", clip=(-1, 1),
-                       label='After calibration',legend=False)
-fig = sns_plot.get_figure()
-fig.savefig(save)
+            label='Before calibration', legend=False)
+sns.kdeplot(df['DRD Test Tau2'], shade=True, color="b", clip=(-1, 1), label='Oracle referral', legend=False)
+sns.kdeplot(df['DRD Test Tau3'], shade=True, color="orange", clip=(-1, 1),
+                       label='After calibration', legend=False)
+plt.xlabel('MK')
+plt.ylabel('Density')
+plt.tight_layout()
+plt.savefig(save)
 
 save = dir_dict['current_parent_parent'] + '/results/images/drd_train_tau_comparison.png'
 set_fontsize(fontsize)
+plt.figure(figsize=(12, 9))
 sns.kdeplot(df['DRD Train Tau1'], shade=True, color="r", clip=(-1, 1),
-            label='Before calibration',legend=False)
-sns.kdeplot(df['DRD Train Tau2'], shade=True, color="b", clip=(-1, 1), label='Oracle referral',legend=False)
+            label='Before calibration', legend=False)
+sns.kdeplot(df['DRD Train Tau2'], shade=True, color="b", clip=(-1, 1), label='Oracle referral', legend=False)
 sns_plot = sns.kdeplot(df['DRD Train Tau3'], shade=True, color="orange", clip=(-1, 1),
-                       label='After calibration',legend=False)
-fig = sns_plot.get_figure()
-fig.savefig(save)
+                       label='After calibration', legend=False)
+plt.xlabel('MK')
+plt.ylabel('Density')
+plt.tight_layout()
+plt.savefig(save)
 
 #####################
 save = dir_dict['current_parent_parent'] + '/results/images/drd_train_ar_comparison.png'
 set_fontsize(fontsize)
+plt.figure(figsize=(12, 9))
 sns.kdeplot(df['DRD Train A1'], shade=True, color="r", clip=(-np.inf, 1),
-            label='Before calibration',legend=False)
-sns.kdeplot(df['DRD Train A2'], shade=True, color="b", clip=(-np.inf, 1), label='Oracle referral',legend=False)
-sns_plot = sns.kdeplot(df['DRD Train A3'], shade=True, color="orange", clip=(-np.inf, 1),
-                       label='After calibration',legend=False)
-fig = sns_plot.get_figure()
-fig.savefig(save)
+            label='Before calibration', legend=False)
+sns.kdeplot(df['DRD Train A2'], shade=True, color="b", clip=(-np.inf, 1), label='Oracle referral', legend=False)
+sns.kdeplot(df['DRD Train A3'], shade=True, color="orange", clip=(-np.inf, 1),
+                       label='After calibration', legend=False)
+plt.xlabel('AR')
+plt.ylabel('Density')
+plt.tight_layout()
+plt.savefig(save)
 
 save = dir_dict['current_parent_parent'] + '/results/images/drd_test_ar_comparison.png'
 set_fontsize(fontsize)
+plt.figure(figsize=(12, 9))
 sns.kdeplot(df['DRD Test A1'], shade=True, color="r", clip=(-np.inf, 1),
-            label='Before calibration',legend=False)
-sns.kdeplot(df['DRD Test A2'], shade=True, color="b", clip=(-np.inf, 1), label='Oracle referral',legend=False)
-sns_plot = sns.kdeplot(df['DRD Test A3'], shade=True, color="orange", clip=(-np.inf, 1),
-                       label='After calibration',legend=False)
-fig = sns_plot.get_figure()
-fig.savefig(save)
+            label='Before calibration', legend=False)
+sns.kdeplot(df['DRD Test A2'], shade=True, color="b", clip=(-np.inf, 1), label='Oracle referral', legend=False)
+sns.kdeplot(df['DRD Test A3'], shade=True, color="orange", clip=(-np.inf, 1),
+                       label='After calibration', legend=False)
+plt.xlabel('AR')
+plt.ylabel('Density')
+plt.tight_layout()
+plt.savefig(save)
 
 save = dir_dict['current_parent_parent'] + '/results/images/aptos_test_ar_comparison.png'
 set_fontsize(fontsize)
+plt.figure(figsize=(12, 9))
 sns.kdeplot(df['APTOS Test A1'], shade=True, color="r", clip=(-np.inf, 1),
-            label='Before calibration',legend=False)
-sns.kdeplot(df['APTOS Test A2'], shade=True, color="b", clip=(-np.inf, 1), label='Oracle referral',legend=False)
-sns_plot = sns.kdeplot(df['APTOS Test A3'], shade=True, color="orange", clip=(-np.inf, 1),
-                       label='After calibration',legend=False)
-fig = sns_plot.get_figure()
-fig.savefig(save)
+            label='Before calibration', legend=False)
+sns.kdeplot(df['APTOS Test A2'], shade=True, color="b", clip=(-np.inf, 1), label='Oracle referral', legend=False)
+sns.kdeplot(df['APTOS Test A3'], shade=True, color="orange", clip=(-np.inf, 1),
+                       label='After calibration', legend=False)
+plt.xlabel('AR')
+plt.ylabel('Density')
+plt.tight_layout()
+plt.savefig(save)
 
 #####################
 
@@ -132,11 +149,11 @@ stats.pearsonr(drd_train_aucs, df['DRD Train ECE1'])
 stats.pearsonr(drd_test_aucs, df['DRD Test ECE1'])
 stats.pearsonr(aptos_test_aucs, df['APTOS Test ECE1'])
 
-networks = df['Network'].to_list()*3
-eces = df['DRD Train ECE1'].to_list()+df['DRD Test ECE1'].to_list()+df['APTOS Test ECE1'].to_list()
-df2 = pd.DataFrame({'Network':networks,'ECE':eces})
-df2.boxplot(column=['ECE'],by=['Network'])
-df.boxplot(column=['DRD Test ECE1'],by=['Network'])
+networks = df['Network'].to_list() * 3
+eces = df['DRD Train ECE1'].to_list() + df['DRD Test ECE1'].to_list() + df['APTOS Test ECE1'].to_list()
+df2 = pd.DataFrame({'Network': networks, 'ECE': eces})
+df2.boxplot(column=['ECE'], by=['Network'])
+df.boxplot(column=['DRD Test ECE1'], by=['Network'])
 
 #####################
 
@@ -321,7 +338,7 @@ for which_eval in ['drd_train', 'drd_test', 'aptos_whole']:
     plt.figure(figsize=(12, 9))
     set_fontsize(40)
     plt.plot([0, 1], [0, 1], "k:", label="Perfect calibration")
-    plt.plot(mean_pred_value_before, fraction_of_pos_before, "s-",label="ECE={}".format(round(ece_before, 2)))
+    plt.plot(mean_pred_value_before, fraction_of_pos_before, "s-", label="ECE={}".format(round(ece_before, 2)))
     # ax1.text(x=0.5, y=0, s='ECE = {}'.format(round(ece, 4)))
     plt.xlabel("Predicted probability")
     plt.ylabel('Fraction of positives')

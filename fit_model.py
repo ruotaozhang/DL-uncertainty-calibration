@@ -145,7 +145,16 @@ def dann_train_v2(nnet_dict: Dict, loss_fn_dict: Dict, opt_dict: Dict, source_lo
 
 
 def train_evaluate(train_config: Dict, drd_loader_dict: Dict, aptos_loader_dict: Dict, path_dict: Dict):
-    # define dataloaders
+    """
+    Perform model training and evaluation according to configuration given in train_config
+    :param train_config: training configuration
+    :param drd_loader_dict: data loader for DRD data
+    :param aptos_loader_dict: data loader for APTOS data
+    :param path_dict: dictionary containing relevant paths
+    :return: a dictionary containing model training and evaluation results
+    """
+
+    # define the training dataloader
     if train_config['bootstrap']:
         train_loader = drd_loader_dict['train_b_aug']
     elif train_config['domain_adapted'] == 0:
@@ -161,6 +170,8 @@ def train_evaluate(train_config: Dict, drd_loader_dict: Dict, aptos_loader_dict:
     n_epoch = train_config['n_epoch']
     device = train_config['device']
 
+    # define dim of output layer of network
+    # define loss function
     if train_config['num_class'] == 2:
         output_dim = 1
         label_loss_fn = torch.nn.BCEWithLogitsLoss(reduction='none').to(device)
@@ -168,6 +179,7 @@ def train_evaluate(train_config: Dict, drd_loader_dict: Dict, aptos_loader_dict:
         output_dim = train_config['num_class']
         label_loss_fn = torch.nn.CrossEntropyLoss(reduction='none').to(device)
 
+    #
     if train_config['domain_adapted'] == 1:
         nnet = make_DANN(output_dim=output_dim, architecture=train_config['architecture'], drop_p=conv_drop_p,
                          pretrained=train_config['pretrained'], add_noise=train_config['add_noise']).to(device)
@@ -327,4 +339,4 @@ def main():
 
 
 if __name__ == '__main__':
-    result_dict = main()
+    main()
