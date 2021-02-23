@@ -47,6 +47,7 @@
 
 trend_analysis.py
 Analysis.py
+utils/__pycache__
 
 # CMake
 cmake-build-*/
