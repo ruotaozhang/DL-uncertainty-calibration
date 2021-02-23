@@ -8,6 +8,14 @@ from utils.datasetLoader import *
 
 
 def nn_train(nnet, loss_fn, optimizer, train_loader) -> list:
+    """
+    Train 1 epoch of neural net
+    :param nnet: the neural net model
+    :param loss_fn: loss function to be used
+    :param optimizer: optimizer
+    :param train_loader: training data loader
+    :return: a list of loss during one epoch of training
+    """
     device = next(nnet.parameters()).device
     loss_list = []
     for x_batch, y_batch in train_loader:
@@ -28,6 +36,18 @@ def nn_train(nnet, loss_fn, optimizer, train_loader) -> list:
 
 
 def dann_train(nnet, label_loss_fn, domain_loss_fn, optimizer, source_loader, target_loader, epoch, n_epoch):
+    """
+    Train one epoch of DANN based on implementation of https://github.com/fungtion/DANN
+    :param nnet: the DANN model
+    :param label_loss_fn: loss function for label classifier
+    :param domain_loss_fn: loss function for domain classifier
+    :param optimizer: optimizer
+    :param source_loader: source data loader
+    :param target_loader: target data loader
+    :param epoch: current epoch number
+    :param n_epoch: total number of epochs for training
+    :return: a list of label classifier training loss and a list of domain classifier training loss
+    """
     device = next(nnet.parameters()).device
     label_loss_list = []
     domain_loss_list = []
@@ -76,8 +96,19 @@ def dann_train(nnet, label_loss_fn, domain_loss_fn, optimizer, source_loader, ta
 
 def dann_train_v2(nnet_dict: Dict, loss_fn_dict: Dict, opt_dict: Dict, source_loader: DataLoader,
                   target_loader: DataLoader, epoch: int, n_epoch: int):
-    # optimizer must match nnet parameters
-    # for domain classification: source domain=1, target domain=0
+    """
+    Train one epoch of DANN based on implementation of https://github.com/Yangyangii/DANN-pytorch.
+    Optimizers must match nnet parameters
+    For domain classification: source domain=1, target domain=0
+    :param nnet_dict: a dict containing fe (feature extractor), lc (label classifier) and dc (domain classifier)
+    :param loss_fn_dict: a dict containing loss functions for lc and dc
+    :param opt_dict: a dict containing optimizers for fe, lc and dc
+    :param source_loader: source data loader
+    :param target_loader: target data loader
+    :param epoch: current epoch number
+    :param n_epoch: total number of epochs for training
+    :return: a list of lc training loss and a list of dc training loss
+    """
     fe = nnet_dict['fe']
     lc = nnet_dict['lc']
     dc = nnet_dict['dc']
@@ -163,7 +194,7 @@ def train_evaluate(train_config: Dict, drd_loader_dict: Dict, aptos_loader_dict:
         source_train_loader = drd_loader_dict['train_aug']
         target_train_loader = aptos_loader_dict['all_aug']
 
-    # setup model and hyperparameters
+    # retrieve hyperparameters from train config
     learning_rate = train_config['learning_rate']
     weight_decay = train_config['weight_decay']
     conv_drop_p = train_config['conv_drop_p']
@@ -171,7 +202,7 @@ def train_evaluate(train_config: Dict, drd_loader_dict: Dict, aptos_loader_dict:
     device = train_config['device']
 
     # define dim of output layer of network
-    # define loss function
+    # define loss function for label classifier
     if train_config['num_class'] == 2:
         output_dim = 1
         label_loss_fn = torch.nn.BCEWithLogitsLoss(reduction='none').to(device)
@@ -179,7 +210,9 @@ def train_evaluate(train_config: Dict, drd_loader_dict: Dict, aptos_loader_dict:
         output_dim = train_config['num_class']
         label_loss_fn = torch.nn.CrossEntropyLoss(reduction='none').to(device)
 
-    #
+    # construct the network
+    # define optimizer
+    # define loss for domain classifier if applicable
     if train_config['domain_adapted'] == 1:
         nnet = make_DANN(output_dim=output_dim, architecture=train_config['architecture'], drop_p=conv_drop_p,
                          pretrained=train_config['pretrained'], add_noise=train_config['add_noise']).to(device)
@@ -270,6 +303,7 @@ def train_evaluate(train_config: Dict, drd_loader_dict: Dict, aptos_loader_dict:
         train_config['n_epoch'], conv_drop_p, dt_string, drd_train_eval['auc'], drd_test_eval['auc'],
         aptos_whole_eval['auc'])
 
+    # save model info
     try:
         os.mkdir(path_dict['model_save'] + model_name_string0[:-1] + '_' + train_config['array_job_id'])
     except FileExistsError:
@@ -287,6 +321,7 @@ def main():
     device_id = '0'
     path_dict = get_path(device_id)
 
+    # retrieve job info from cluster
     parser = argparse.ArgumentParser()
     parser.add_argument("-job", default='000000')
     parser.add_argument("-arrayjob", default='000000')

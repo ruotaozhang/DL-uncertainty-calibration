@@ -45,6 +45,8 @@
 # *.iml
 # *.ipr
 
+trend_analysis.py
+
 # CMake
 cmake-build-*/
 

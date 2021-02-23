@@ -1,35 +1,100 @@
-import torch
-import torchvision.models as models
-import numpy as np
-from scipy.stats import multinomial
-from sklearn import metrics
-import copy
-from utils.customNetworks import DANN, FeatureExtractor, LabelClassifier, DomainClassifier
-import dalib.adaptation
-from dalib.modules.domain_discriminator import DomainDiscriminator
 import os
 import platform
 import logging
+import copy
+import torch
+import torchvision.models as models
+import numpy as np
+from sklearn import metrics
+from utils.customNetworks import DANN, FeatureExtractor, LabelClassifier, DomainClassifier
 
 
-def multinomial_cov(array):
-    # array must be of shape: (num_class,)
-    c = np.outer(array, array)
-    np.fill_diagonal(c, 0)
-    return np.diag(array * (1 - array)) - c
+def msg(message: str):
+    """
+    Print message and add it to log
+    :param message: a string of message to be added to log
+    :return: None
+    """
+    logging.info(message)
+    print(message)
 
 
-def multinomial_cov_highdim(array):
-    # array must be of shape: (batch_size,T,num_class)
-    out = np.random.rand(array.shape[0], array.shape[1], array.shape[2], array.shape[2])
-    for i in range(array.shape[0]):
-        for j in range(array.shape[1]):
-            out[i, j, :, :] = multinomial_cov(array[i, j, :])
-    return out
+def get_path(device_id=None) -> dict:
+    """
+    get paths to useful directories
+    :param device_id: specify gpu id on Athena
+    :return: a dictionary containing relevant paths
+    """
+    try:
+        current_file_path = os.path.dirname(os.path.abspath(__file__)).replace('\\', '/')
+    except NameError:
+        current_file_path = os.getcwd().replace('\\', '/')
+
+    current_parent_path = os.path.dirname(current_file_path)
+    current_parent_parent_path = os.path.dirname(current_parent_path)
+
+    system = platform.system()
+    if system == 'Linux':
+        if 'centos' in platform.platform():
+            data_path = current_parent_parent_path + '/datasets'
+            save_path = current_parent_parent_path + '/saved_files'
+            if device_id is not None:
+                assert device_id in ['0', '1'], 'invalid argument device_id'
+                os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+                os.environ["CUDA_VISIBLE_DEVICES"] = device_id
+        else:
+            data_path = '/gpfs/data/jsteingr/rzhang63/datasets'
+            save_path = os.path.dirname(data_path) + '/saved_files'
+    else:
+        data_path = 'D:/ML/datasets'
+        save_path = current_parent_parent_path + '/saved_files'
+
+    drd_img_path = data_path + '/diabetic-retinopathy-detection/train/'
+    drd_label_path = data_path + '/diabetic-retinopathy-detection/'
+    aptos_img_path = data_path + '/aptos2019-blindness-detection/train/'
+    aptos_label_path = data_path + '/aptos2019-blindness-detection/'
+    model_save_path = save_path + '/model_files/DR/'
+    evaldict_save_path = save_path + '/eval_dicts/'
+    tensorboard_path = save_path + '/tensorboard_summary/'
+    return {'drd_img': drd_img_path, 'drd_label': drd_label_path, 'aptos_img': aptos_img_path,
+            'aptos_label': aptos_label_path, 'model_save': model_save_path, 'evaldict_save': evaldict_save_path,
+            'tfboard': tensorboard_path, 'current': current_file_path, 'current_parent': current_parent_path,
+            'current_parent_parent': current_parent_parent_path}
 
 
-def add_dropout(model, drop_p, dropout_type='1d'):
-    assert dropout_type in ['1d', '2d'], 'invalid type value'
+def auc_estimation(y: np.ndarray, s: np.ndarray, bootstrap=False) -> dict:
+    """
+    Estimate of AUC and bootstrap estimate of variance
+    :param y: true 0/1 response. np array with shape=(N,)
+    :param s: predicted score. np array with shape=(N,)
+    :param bootstrap: whether to compute 95% boostrap CI
+    :return: a dictionary containing the estimated AUC and 95% CI
+    """
+    assert isinstance(y, np.ndarray) and len(y.shape) == 1, 'y: invalid input'
+    assert isinstance(s, np.ndarray) and len(s.shape) == 1 and s.shape[0] == y.shape[0], 's: invalid input'
+    assert set(y) == {0, 1}, 'y: invalid input'
+    n = y.shape[0]
+    auc = metrics.roc_auc_score(y, s)
+    if bootstrap:
+        b_mu_list = []
+        for b in range(1000):
+            np.random.seed(b)
+            b_idx = np.random.choice(range(n), n)
+            b_y = y[b_idx]
+            b_s = s[b_idx]
+            b_mu = metrics.roc_auc_score(b_y, b_s)
+            b_mu_list.append(b_mu)
+        return {'mu': auc, 'b_var': np.var(b_mu_list, ddof=1), 'b_ci': np.quantile(b_mu_list, (0.025, 0.975))}
+    return {'mu': auc}
+
+
+def add_dropout(model, drop_p: float):
+    """
+    Add dropout to every Conv2d layer in the network
+    :param model: the neural net to which we wish to add dropout
+    :param drop_p: the dropout rate for the added dropout layers
+    :return: a model with dropout added after every Conv2d layer
+    """
     layers_to_change = []
     for name, module in model.named_modules():
         if isinstance(module, torch.nn.Conv2d):
@@ -51,181 +116,41 @@ def add_dropout(model, drop_p, dropout_type='1d'):
         else:
             m = model.__getattr__(child)
             orig_layer = copy.deepcopy(m)  # deepcopy, otherwise you'll get an infinite recusrsion
-        # Add your layer here
-        if dropout_type == '1d':
-            m.__setattr__(child, torch.nn.Sequential(orig_layer, torch.nn.Dropout(p=drop_p)))
-        else:
-            m.__setattr__(child, torch.nn.Sequential(orig_layer, torch.nn.Dropout2d(p=drop_p)))
+        # Add dropout layer here
+        m.__setattr__(child, torch.nn.Sequential(orig_layer, torch.nn.Dropout(p=drop_p)))
     return model
 
 
-def make_net(output_dim: int, architecture='shuffle05', drop_p=0.0, pretrained=True, add_noise=False):
-    assert architecture in ['shuffle05', 'shuffle10', 'mobile', 'resnet50'], 'wrong network architecture choice'
-    if architecture == 'shuffle05':
-        nnet = models.shufflenet_v2_x0_5(pretrained=pretrained)
-        nnet.fc = torch.nn.Linear(nnet.fc.in_features, output_dim)
-    elif architecture == 'shuffle10':
-        nnet = models.shufflenet_v2_x1_0(pretrained=pretrained)
-        nnet.fc = torch.nn.Linear(nnet.fc.in_features, output_dim)
-    elif architecture == 'mobile':
-        nnet = models.mobilenet_v2(pretrained=pretrained)
-        nnet.classifier[-1] = torch.nn.Linear(nnet.classifier[-1].in_features, output_dim)
-    else:
-        nnet = models.resnet50(pretrained=pretrained)
-        nnet.fc = torch.nn.Linear(nnet.fc.in_features, output_dim)
-
-    if drop_p > 0:
-        nnet = add_dropout(model=nnet, drop_p=drop_p)
-        print('inserting dropout layers after all conv2d layers with drop_p={}'.format(drop_p))
-
-    print('number of param: {}'.format(sum([param.nelement() for param in nnet.parameters()])))
-
-    if add_noise:
-        assert pretrained, 'can only add noise to pretrained weights'
-        print('adding noise to pretrained weights')
-        with torch.no_grad():
-            for param in nnet.parameters():
-                param.add_(torch.randn(param.size()) * 0.01)
-
-    return torch.nn.DataParallel(nnet)
-
-
-def make_DANN(output_dim, architecture='shuffle05', drop_p=0.0, pretrained=True, add_noise=False):
-    nnet = DANN(architecture=architecture, output_dim=output_dim, pretrained=pretrained)
-
-    if drop_p > 0:
-        nnet = add_dropout(model=nnet, drop_p=drop_p)
-        print('inserting dropout layers after all conv2d layers with drop_p={}'.format(drop_p))
-
-    print('number of param: {}'.format(sum([param.nelement() for param in nnet.parameters()])))
-
-    if add_noise:
-        assert pretrained, 'can only add noise to pretrained weights'
-        print('adding noise to pretrained weights')
-        with torch.no_grad():
-            for param in nnet.parameters():
-                param.add_(torch.randn(param.size()) * 0.01)
-
-    return torch.nn.DataParallel(nnet)
-
-
-def make_DANN_v2(output_dim, architecture='shuffle05', drop_p=0.0, pretrained=True, add_noise=False):
-    fe = FeatureExtractor(architecture=architecture, pretrained=pretrained)
-    with torch.no_grad():
-        a = fe.to('cpu')(torch.rand(2, 3, 512, 512))
-    input_dim = a.view(2, -1).shape[1]
-    lc = LabelClassifier(input_dim=input_dim, output_dim=output_dim)
-    dc = DomainClassifier(input_dim=input_dim)
-
-    if drop_p > 0:
-        fe = add_dropout(model=fe, drop_p=drop_p)
-        print('inserting dropout layers after all conv2d layers with drop_p={}'.format(drop_p))
-
-    print('number of param in FeatureExtractor: {}'.format(sum([param.nelement() for param in fe.parameters()])))
-    print('number of param in LabelClassifier: {}'.format(sum([param.nelement() for param in lc.parameters()])))
-    print('number of param in DomainClassifier: {}'.format(sum([param.nelement() for param in dc.parameters()])))
-
-    if add_noise:
-        assert pretrained, 'can only add noise to pretrained weights'
-        print('adding noise to pretrained weights in FeatureExtractor')
-        with torch.no_grad():
-            for param in fe.parameters():
-                param.add_(torch.randn(param.size()) * 0.01)
-
-    return torch.nn.DataParallel(fe), torch.nn.DataParallel(lc), torch.nn.DataParallel(dc)
-
-
-def refer_performance2(pred_prob, truth, binning_scheme='quantile', n_bins=50):
-    assert binning_scheme in ['uniform', 'quantile'], 'invalid binning scheme'
-    prob_of_pos = pred_prob[:, 1]
-    if binning_scheme == 'quantile':  # Determine bin edges by distribution of data
-        quantiles = np.linspace(0, 1, n_bins + 1)
-        bins = np.percentile(prob_of_pos, quantiles * 100)
-        bins[-1] = bins[-1] + 1e-8
-    else:
-        bins = np.linspace(0., 1. + 1e-8, n_bins + 1)
-
-    binids = np.digitize(prob_of_pos, bins) - 1
-    unique_bin_ids = np.unique(binids)
-    frac_of_pos = np.array([np.sum(truth[binids == id].numpy()) / np.sum(binids == id) for id in unique_bin_ids])
-
-    auc0 = metrics.roc_auc_score(truth, prob_of_pos)
-    sort_idx = np.argsort(np.abs(frac_of_pos - 0.5))
-    p = 0  # percentage of removed cases
-    auc_list = [(p, auc0)]
-    i = 0
-    bin_ids_2_remove = []
-    while p <= 0.5:
-        bin_ids_2_remove.append(sort_idx[i])
-        retained_cases_preds = prob_of_pos[np.isin(binids, bin_ids_2_remove, invert=True)]
-        retained_cases_truth = truth[np.isin(binids, bin_ids_2_remove, invert=True)]
-        p = 1 - len(retained_cases_preds) / len(prob_of_pos)
-        auc_p = metrics.roc_auc_score(retained_cases_truth, retained_cases_preds)
-        auc_list.append((p, auc_p))
-        i += 1
-
-    return {'auc': auc_list, 'auc_rand': None}
-
-
-def refer_performance(pred_prob, truth, uncert):
-    if isinstance(pred_prob, np.ndarray):
-        pred_prob = torch.tensor(pred_prob)
-    assert pred_prob.dim() == 2, 'pred_prob should have shape=(n_samples,num_class)'
-    assert pred_prob.shape[1] == 2, 'num_class must be 2'
-    _, preds = torch.max(pred_prob, 1)
-    n_samples = pred_prob.shape[0]
-    auc_array = torch.zeros((51))
-    for i in range(51):
-        p = 1 - i / 100  # percentage of retained cases
-        k = int(n_samples * p)
-        # take out the k smallest uncert values and corresponding indices
-        uncert_sorted, uncert_sorted_idx = torch.topk(uncert, k=k, largest=False)
-        auc_array[i] = metrics.roc_auc_score(truth[uncert_sorted_idx], pred_prob[uncert_sorted_idx, 1])
-    return auc_array
-
-
-def prob2uncertainty(prob_array):
-    # prob_array must be tensor array of shape=(batch_size,T,num_class)
-    # input prob_array can be on any device, but all function returns are on cpu
-    # T=1 is ok, but uncertainty estimates do not make sense
+def prob2uncertainty(prob_array: torch.Tensor) -> dict:
+    """
+    Compute predictive entropy based on predicted probability.
+    :param prob_array: tensor array of shape=(batch_size,T,num_class)
+    :return: a dict containing prob_array, mean_prob_array and predictive entropy
+    """
     assert prob_array.dim() == 3, 'prob_array must have dim=3'
 
     prob_array = prob_array.cpu()
     assert np.argwhere(np.isnan(prob_array.numpy())).size == 0, 'prob array contains nan'
 
+    # mean predicted probability averaged over T
     mean_prob_array = torch.mean(prob_array, dim=1)  # shape=(batch_size,num_class)
 
-    aleatoric = multinomial.cov(n=1, p=prob_array)  # shape=(batch_size,T,num_class,num_class)
-    if np.argwhere(np.isnan(aleatoric)).size != 0:
-        aleatoric = multinomial_cov_highdim(prob_array)
-        assert np.argwhere(np.isnan(aleatoric)).size == 0, 'aleatoric contains nan'
-    aleatoric = np.mean(aleatoric, axis=1)  # shape=(batch_size,num_class,num_class)
-    aleatoric = torch.from_numpy(aleatoric)
-
-    epistemic = [np.cov(x, rowvar=False, bias=True) for x in prob_array]
-    assert np.argwhere(np.isnan(epistemic)).size == 0, 'epistemic contains nan'
-    epistemic = np.stack(epistemic, axis=0)  # shape=(batch_size,num_class,num_class)
-    epistemic = torch.from_numpy(epistemic)
-    # cov_y = aleatoric + epistemic
-    # cov_y = multinomial.cov(n=1,p=mean_prob_array) # shape=(batch_size,num_class,num_class)
-    # assert cov_y == multinomial.cov(n=1,p=mean_prob_array),'something is wrong'
-
+    # predictive entropy
     pred_entropy_array = torch.distributions.categorical.Categorical(mean_prob_array).entropy()  # shape=(batch_size)
     assert np.argwhere(np.isnan(pred_entropy_array.numpy())).size == 0, 'entropy contains nan'
 
-    pred_entropy_array2 = torch.distributions.categorical.Categorical(prob_array).entropy()  # shape=(batch_size,T)
-    aleatoric2 = torch.mean(pred_entropy_array2, dim=1)  # shape=(batch_size)
-    epistemic2 = pred_entropy_array - aleatoric2
-
-    assert np.argwhere(np.isnan(aleatoric2.numpy())).size == 0, 'aleatoric2 contains nan'
-    assert np.argwhere(np.isnan(epistemic2.numpy())).size == 0, 'epistemic2 contains nan'
-
-    return {'prob': prob_array, 'mean_prob': mean_prob_array, 'aleatoric': aleatoric, 'epistemic': epistemic,
-            'entropy': pred_entropy_array, 'aleatoric2': aleatoric2, 'epistemic2': epistemic2}
+    return {'prob': prob_array, 'mean_prob': mean_prob_array, 'entropy': pred_entropy_array}
 
 
-def pred_batch(model_list, img_batch, T=10, mc=False):
-    # T is the number of MC samples
+def pred_batch(model_list: list, img_batch: torch.Tensor, T=10, mc=False):
+    """
+    Given a list of models and a batch of images, compute logit and probability predictions
+    :param model_list: a list of neural network models
+    :param img_batch: tensor representing a batch of images
+    :param T: number of MC predictions to make if mc=True. If mc=False, T is set to 1
+    :param mc: whether to do MC predictions
+    :return: a tuple of logit array and probability array
+    """
     assert isinstance(model_list, list), 'argument model must be a list of network instances'
     assert len(model_list) > 0, 'model list must be non-empty'
 
@@ -287,12 +212,22 @@ def pred_batch(model_list, img_batch, T=10, mc=False):
         return yhat_array, prob_array
 
 
-def pred_acc(model_list:list, data_loader, T=10, mc=False):
-    # T is the number of MC samples
+def pred_acc(model_list: list, data_loader, T=10, mc=False):
+    """
+    Given a list of models and a data loader, compute predictions, predictive entropy and AUC
+    :param model_list: a list of neural network models
+    :param data_loader:
+    :param T: number of MC predictions to make if mc=True. If mc=False, T is set to 1
+    :param mc: whether to do MC predictions
+    :return: a dict containing predictions with entropy and AUC
+    """
     assert isinstance(model_list, list), 'argument model must be a list of network instances'
     assert len(model_list) > 0, 'model list must be non-empty'
 
     M = len(model_list)  # M is the size of ensemble
+
+    if not mc:
+        T = 1
 
     n_samples = len(data_loader.sampler)
     label_list = []
@@ -312,117 +247,190 @@ def pred_acc(model_list:list, data_loader, T=10, mc=False):
     yhat_array = torch.cat(yhat_list, dim=0)  # tensor of shape=(n_samples,T*M,output_dim)
     result_dict = prob2uncertainty(prob_array)
     _, predicted = torch.max(result_dict['mean_prob'], 1)
-    acc = round((predicted == label_array).type(torch.float).mean().item(), 4)
 
     num_class = prob_array.shape[2]
-    if num_class == 2:
-        auc = round(metrics.roc_auc_score(label_array, result_dict['mean_prob'][:, 1]), 4)
-    else:
-        auc = round(metrics.roc_auc_score(label_array, result_dict['mean_prob'], average='weighted', multi_class='ovo'),
-                    4)
+    assert num_class == 2, 'num_class must be 2'
+    auc = round(metrics.roc_auc_score(label_array, result_dict['mean_prob'][:, 1]), 4)
 
     if M > 1:
         if mc:
-            print('Acc and AUC of MC Ensemble on the {} images: acc={} and auc={}'.format(n_samples, acc, auc))
+            print('AUC of MC Ensemble on the {} images: auc={}'.format(n_samples, auc))
         else:
-            print('Acc and AUC of Ensemble on the {} images: acc={} and auc={}'.format(n_samples, acc, auc))
+            print('AUC of Ensemble on the {} images: auc={}'.format(n_samples, auc))
     else:
         if mc:
-            print('Acc and AUC of MC Dropout on the {} images: acc={} and auc={}'.format(n_samples, acc, auc))
+            print('AUC of MC Dropout on the {} images: auc={}'.format(n_samples, auc))
         else:
-            print('Acc and AUC of Regular Network on the {} images: acc={} and auc={}'.format(n_samples, acc, auc))
+            print('AUC of Regular Network on the {} images: auc={}'.format(n_samples, auc))
 
-    return {'acc': acc, 'auc': auc, 'original_logits': yhat_array, 'prob': prob_array,
-            'mean_prob': result_dict['mean_prob'],
-            'entropy': result_dict['entropy'], 'aleatoric': result_dict['aleatoric'],
-            'epistemic': result_dict['epistemic'], 'labels': label_array,
-            'aleatoric2': result_dict['aleatoric2'], 'epistemic2': result_dict['epistemic2']}
+    return {'auc': auc, 'original_logits': yhat_array, 'prob': prob_array, 'mean_prob': result_dict['mean_prob'],
+            'entropy': result_dict['entropy'], 'labels': label_array}
 
 
-def meanprob2logit(mean_probs):
-    mean_probs = torch.tensor(
-        list(map(lambda x: x - 1e-5 if x == 1.0 else (x + 1e-5 if x == 0.0 else x), list(mean_probs.numpy()))))
-    mean_prob_logits = torch.log(mean_probs / (1 - mean_probs))
-    assert np.argwhere(np.isnan(mean_prob_logits.numpy())).size == 0, 'logit has nan'
-    assert len(list(filter(lambda i: list(mean_prob_logits.numpy())[i] in [-np.inf, np.inf],
-                           range(mean_prob_logits.shape[0])))) == 0, 'logit has inf'
-    return mean_prob_logits
-
-
-def auc_estimation(y: np.ndarray, s: np.ndarray, bootstrap=False) -> dict:
+def make_net(output_dim: int, architecture='shuffle05', drop_p=0.0, pretrained=True, add_noise=False):
     """
-    Estimate of AUC and estimate of variance
-    :param y: true 0/1 response. np array with shape=(N,)
-    :param s: predicted score. np array with shape=(N,)
-    :param bootstrap: whether to compute 95% boostrap CI
-    :return: a dictionary containing the estimated AUC and 95% CI
+    Construct a neural net based on the specification.
+    :param output_dim: output dimension of the neural net. When num_class=2, output_dim=1, otherwise output_dim=num_class
+    :param architecture: architecture of the network
+    :param drop_p: the dropout rate to be added after every Conv2d layer in the network
+    :param pretrained: whether to start with pre-trained weights
+    :param add_noise: whether to add small Gaussian noise to pre-trained weights
+    :return: a neural network model
     """
-    assert isinstance(y, np.ndarray) and len(y.shape) == 1, 'y: invalid input'
-    assert isinstance(s, np.ndarray) and len(s.shape) == 1 and s.shape[0] == y.shape[0], 's: invalid input'
-    assert set(y) == {0, 1}, 'y: invalid input'
-    n = y.shape[0]
-    auc = metrics.roc_auc_score(y, s)
-    if bootstrap:
-        b_mu_list = []
-        for b in range(1000):
-            np.random.seed(b)
-            b_idx = np.random.choice(range(n), n)
-            b_y = y[b_idx]
-            b_s = s[b_idx]
-            b_mu = metrics.roc_auc_score(b_y, b_s)
-            b_mu_list.append(b_mu)
-        return {'mu': auc, 'b_var': np.var(b_mu_list, ddof=1), 'b_ci': np.quantile(b_mu_list, (0.025, 0.975))}
-    return {'mu': auc}
-
-
-def get_path(device_id=None) -> dict:
-    """
-    get paths to useful directories
-    :param device_id: specify gpu id on Athena
-    :return: a dictionary containing relevant paths
-    """
-    try:
-        current_file_path = os.path.dirname(os.path.abspath(__file__)).replace('\\', '/')
-    except NameError:
-        current_file_path = os.getcwd().replace('\\', '/')
-
-    current_parent_path = os.path.dirname(current_file_path)
-    current_parent_parent_path = os.path.dirname(current_parent_path)
-
-    system = platform.system()
-    if system == 'Linux':
-        if 'centos' in platform.platform():
-            data_path = current_parent_parent_path + '/datasets'
-            save_path = current_parent_parent_path + '/saved_files'
-            if device_id is not None:
-                assert device_id in ['0', '1'], 'invalid argument device_id'
-                os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-                os.environ["CUDA_VISIBLE_DEVICES"] = device_id
-        else:
-            data_path = '/gpfs/data/jsteingr/rzhang63/datasets'
-            save_path = os.path.dirname(data_path) + '/saved_files'
+    assert architecture in ['shuffle05', 'shuffle10', 'mobile', 'resnet50'], 'wrong network architecture choice'
+    if architecture == 'shuffle05':
+        nnet = models.shufflenet_v2_x0_5(pretrained=pretrained)
+        nnet.fc = torch.nn.Linear(nnet.fc.in_features, output_dim)
+    elif architecture == 'shuffle10':
+        nnet = models.shufflenet_v2_x1_0(pretrained=pretrained)
+        nnet.fc = torch.nn.Linear(nnet.fc.in_features, output_dim)
+    elif architecture == 'mobile':
+        nnet = models.mobilenet_v2(pretrained=pretrained)
+        nnet.classifier[-1] = torch.nn.Linear(nnet.classifier[-1].in_features, output_dim)
     else:
-        data_path = 'D:/ML/datasets'
-        save_path = current_parent_parent_path + '/saved_files'
+        nnet = models.resnet50(pretrained=pretrained)
+        nnet.fc = torch.nn.Linear(nnet.fc.in_features, output_dim)
 
-    drd_img_path = data_path + '/diabetic-retinopathy-detection/train/'
-    drd_label_path = data_path + '/diabetic-retinopathy-detection/'
-    aptos_img_path = data_path + '/aptos2019-blindness-detection/train/'
-    aptos_label_path = data_path + '/aptos2019-blindness-detection/'
-    model_save_path = save_path + '/model_files/DR/'
-    evaldict_save_path = save_path + '/eval_dicts/'
-    tensorboard_path = save_path + '/tensorboard_summary/'
-    return {'drd_img': drd_img_path, 'drd_label': drd_label_path, 'aptos_img': aptos_img_path,
-            'aptos_label': aptos_label_path, 'model_save': model_save_path, 'evaldict_save': evaldict_save_path,
-            'tfboard': tensorboard_path, 'current': current_file_path, 'current_parent': current_parent_path,
-            'current_parent_parent': current_parent_parent_path}
+    if drop_p > 0:
+        nnet = add_dropout(model=nnet, drop_p=drop_p)
+        print('inserting dropout layers after all conv2d layers with drop_p={}'.format(drop_p))
 
+    print('number of param: {}'.format(sum([param.nelement() for param in nnet.parameters()])))
 
-def running_mean(x, N):
-    cumsum = np.cumsum(np.insert(x, 0, 0))
-    return (cumsum[N:] - cumsum[:-N]) / float(N)
+    if add_noise:
+        assert pretrained, 'can only add noise to pretrained weights'
+        print('adding noise to pretrained weights')
+        with torch.no_grad():
+            for param in nnet.parameters():
+                param.add_(torch.randn(param.size()) * 0.01)
+
+    return torch.nn.DataParallel(nnet)
 
 
-def msg(message):
-    logging.info(message)
-    print(message)
+def make_DANN(output_dim, architecture='shuffle05', drop_p=0.0, pretrained=True, add_noise=False):
+    """
+    Construct a DANN model based on the specification. This particular implementation is based on
+    https://github.com/fungtion/DANN
+    :param output_dim: output dimension of the neural net. When num_class=2, output_dim=1, otherwise output_dim=num_class
+    :param architecture: architecture of the network
+    :param drop_p: the dropout rate to be added after every Conv2d layer in the network
+    :param pretrained: whether to start with pre-trained weights
+    :param add_noise: whether to add small Gaussian noise to pre-trained weights
+    :return: a DANN model
+    """
+    nnet = DANN(architecture=architecture, output_dim=output_dim, pretrained=pretrained)
+
+    if drop_p > 0:
+        nnet = add_dropout(model=nnet, drop_p=drop_p)
+        print('inserting dropout layers after all conv2d layers with drop_p={}'.format(drop_p))
+
+    print('number of param: {}'.format(sum([param.nelement() for param in nnet.parameters()])))
+
+    if add_noise:
+        assert pretrained, 'can only add noise to pretrained weights'
+        print('adding noise to pretrained weights')
+        with torch.no_grad():
+            for param in nnet.parameters():
+                param.add_(torch.randn(param.size()) * 0.01)
+
+    return torch.nn.DataParallel(nnet)
+
+
+def make_DANN_v2(output_dim, architecture='shuffle05', drop_p=0.0, pretrained=True, add_noise=False):
+    """
+    Construct a DANN model based on the specification. This particular implementation is based on
+    https://github.com/Yangyangii/DANN-pytorch
+    :param output_dim: output dimension of the neural net. When num_class=2, output_dim=1, otherwise output_dim=num_class
+    :param architecture: architecture of the network
+    :param drop_p: the dropout rate to be added after every Conv2d layer in the network
+    :param pretrained: whether to start with pre-trained weights
+    :param add_noise: whether to add small Gaussian noise to pre-trained weights
+    :return: a DANN model
+    """
+    fe = FeatureExtractor(architecture=architecture, pretrained=pretrained)
+    with torch.no_grad():
+        a = fe.to('cpu')(torch.rand(2, 3, 512, 512))
+    input_dim = a.view(2, -1).shape[1]
+    lc = LabelClassifier(input_dim=input_dim, output_dim=output_dim)
+    dc = DomainClassifier(input_dim=input_dim)
+
+    if drop_p > 0:
+        fe = add_dropout(model=fe, drop_p=drop_p)
+        print('inserting dropout layers after all conv2d layers with drop_p={}'.format(drop_p))
+
+    print('number of param in FeatureExtractor: {}'.format(sum([param.nelement() for param in fe.parameters()])))
+    print('number of param in LabelClassifier: {}'.format(sum([param.nelement() for param in lc.parameters()])))
+    print('number of param in DomainClassifier: {}'.format(sum([param.nelement() for param in dc.parameters()])))
+
+    if add_noise:
+        assert pretrained, 'can only add noise to pretrained weights'
+        print('adding noise to pretrained weights in FeatureExtractor')
+        with torch.no_grad():
+            for param in fe.parameters():
+                param.add_(torch.randn(param.size()) * 0.01)
+
+    return torch.nn.DataParallel(fe), torch.nn.DataParallel(lc), torch.nn.DataParallel(dc)
+
+
+def entropy_based_referral(pred_prob:torch.Tensor, truth, uncert):
+    """
+    Perform entropy-based referral based on a set of predictions
+    :param pred_prob: the predicted probabilities
+    :param truth: the groud-truth response/outcome/label
+    :param uncert: the uncertainty (entropy) associated with each prediction
+    :return: a tensor of auc values
+    """
+    if isinstance(pred_prob, np.ndarray):
+        pred_prob = torch.tensor(pred_prob)
+    assert pred_prob.dim() == 2, 'pred_prob should have shape=(n_samples,num_class)'
+    assert pred_prob.shape[1] == 2, 'num_class must be 2'
+    _, preds = torch.max(pred_prob, 1)
+    n_samples = pred_prob.shape[0]
+    auc_array = torch.zeros((51))
+    for i in range(51):
+        p = 1 - i / 100  # percentage of retained cases
+        k = int(n_samples * p)
+        # take out the k smallest uncert values and corresponding indices
+        uncert_sorted, uncert_sorted_idx = torch.topk(uncert, k=k, largest=False)
+        auc_array[i] = metrics.roc_auc_score(truth[uncert_sorted_idx], pred_prob[uncert_sorted_idx, 1])
+    return auc_array
+
+
+def oracle_referral(pred_prob, truth, binning_scheme='quantile', n_bins=50):
+    """
+    Perform oracle referral based on the set of predictions.
+    :param pred_prob: the predicted probabilities
+    :param truth: the groud-truth response/outcome/label
+    :param binning_scheme: how to bin the predicted probabilities
+    :param n_bins: number of bins
+    :return: a sequence of auc values
+    """
+    assert binning_scheme in ['uniform', 'quantile'], 'invalid binning scheme'
+    prob_of_pos = pred_prob[:, 1]
+    if binning_scheme == 'quantile':  # Determine bin edges by distribution of data
+        quantiles = np.linspace(0, 1, n_bins + 1)
+        bins = np.percentile(prob_of_pos, quantiles * 100)
+        bins[-1] = bins[-1] + 1e-8
+    else:
+        bins = np.linspace(0., 1. + 1e-8, n_bins + 1)
+
+    binids = np.digitize(prob_of_pos, bins) - 1
+    unique_bin_ids = np.unique(binids)
+    frac_of_pos = np.array([np.sum(truth[binids == id].numpy()) / np.sum(binids == id) for id in unique_bin_ids])
+
+    auc0 = metrics.roc_auc_score(truth, prob_of_pos)
+    sort_idx = np.argsort(np.abs(frac_of_pos - 0.5))
+    p = 0  # percentage of removed cases
+    auc_list = [(p, auc0)]
+    i = 0
+    bin_ids_2_remove = []
+    while p <= 0.5:
+        bin_ids_2_remove.append(sort_idx[i])
+        retained_cases_preds = prob_of_pos[np.isin(binids, bin_ids_2_remove, invert=True)]
+        retained_cases_truth = truth[np.isin(binids, bin_ids_2_remove, invert=True)]
+        p = 1 - len(retained_cases_preds) / len(prob_of_pos)
+        auc_p = metrics.roc_auc_score(retained_cases_truth, retained_cases_preds)
+        auc_list.append((p, auc_p))
+        i += 1
+
+    return {'auc': auc_list, 'auc_rand': None}
