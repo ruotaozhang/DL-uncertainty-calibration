@@ -46,6 +46,7 @@
 # *.ipr
 
 trend_analysis.py
+DR_analysis.py
 
 # CMake
 cmake-build-*/

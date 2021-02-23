@@ -4,17 +4,25 @@ from utils.customFunc import *
 from utils.datasetLoader import *
 
 
-def make_eval(model_folder_name: str, path_dict: Dict, model_folder_name_2_job_id_dict: Dict):
+def make_eval(model_folder_name: str, path_dict: Dict, model_folder_name_2_job_id_dict: Dict) -> dict:
+    """
+    Evaluate a given model.
+    :param model_folder_name: folder name of the model to be evaluated
+    :param path_dict: a dict containing relevant paths
+    :param model_folder_name_2_job_id_dict: a mapping between model folder name and job id
+    :return: a dict containing evaluation results
+    """
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-    device = 'cpu'
+    # device = 'cpu'
 
+    # check if this model has already been evaluated
     eval_list = os.listdir(path_dict['evaldict_save'])
     job_id = model_folder_name_2_job_id_dict[model_folder_name]
-
-    if len(list(filter(lambda x: job_id in x, eval_list))) > 0:
+    if len([x for x in eval_list if job_id in x]) > 0:
         msg('Eval dict for {} already exists. Skip. '.format(job_id))
         return 1
 
+    # get the number of base models in the folder
     msg('Evaluating {}'.format(model_folder_name))
     model_list = sorted(os.listdir(path_dict['model_save'] + model_folder_name))
     num_models = len(model_list)
@@ -24,6 +32,7 @@ def make_eval(model_folder_name: str, path_dict: Dict, model_folder_name_2_job_i
         return 1
     msg('Number of models for {}: {}'.format(job_id, num_models))
 
+    # load the models with trained weights
     net_list = []
     domain_loss_list = []
     label_loss_list = []
@@ -89,6 +98,7 @@ def make_eval(model_folder_name: str, path_dict: Dict, model_folder_name_2_job_i
     aptos_loader_dict = Aptos_data_loader(img_path=path_dict['aptos_img'], label_path=path_dict['aptos_label'],
                                           batch_size=100, num_workers=0)
 
+    # start evaluation
     mc = (train_config['conv_drop_p'] > 0)
     eval_dict = {}
     eval_dict['domain_loss'] = domain_loss_list
@@ -100,6 +110,7 @@ def make_eval(model_folder_name: str, path_dict: Dict, model_folder_name_2_job_i
     eval_dict['drd_test_eval'] = pred_acc(model_list=net_list, data_loader=drd_loader_dict['test'], T=100, mc=mc)
     eval_dict['aptos_whole_eval'] = pred_acc(model_list=net_list, data_loader=aptos_loader_dict['all'], T=100, mc=mc)
 
+    # write to output and save
     output = open(path_dict['evaldict_save'] + job_id + '_eval_dict.pkl', 'wb')
     pickle.dump(eval_dict, output)
     output.close()
@@ -111,9 +122,9 @@ def main():
     device_id = '0'
     path_dict = get_path(device_id)
 
-    model_folder_list = list(filter(lambda x: 'archive' not in x, os.listdir(path_dict['model_save'])))
+    model_folder_list = [x for x in os.listdir(path_dict['model_save']) if 'archive' not in x]
     model_folder_list = random.sample(model_folder_list, len(model_folder_list))
-    job_id_list = list(map(lambda x: x[([i for i, c in enumerate(x) if c == '_'][-1] + 1):], model_folder_list))
+    job_id_list = [x[([i for i, c in enumerate(x) if c == '_'][-1] + 1):] for x in model_folder_list]
     assert len(job_id_list) == len(set(job_id_list)), 'duplicates in job id list'
     model_folder_name_2_job_id_dict = dict(zip(model_folder_list, job_id_list))
 
